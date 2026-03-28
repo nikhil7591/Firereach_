@@ -1,0 +1,111 @@
+.payment-demo-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at top left, rgba(99, 102, 241, 0.25), transparent 42%), #050505;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1rem;
+}
+
+.payment-demo-card {
+  width: min(460px, 94vw);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 10, 18, 0.92);
+  border-radius: 18px;
+  padding: 1rem;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+
+.payment-demo-kicker {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #818cf8;
+}
+
+.payment-demo-card h1 {
+  margin: 0.45rem 0 0.85rem;
+  color: #f8fafc;
+  font-size: 1.35rem;
+}
+
+.payment-demo-summary {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.payment-demo-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+}
+
+.payment-demo-summary span {
+  color: #a1a1aa;
+}
+
+.payment-demo-summary strong {
+  color: #f8fafc;
+}
+
+.payment-demo-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.payment-demo-form label {
+  color: #e2e8f0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+}
+
+.payment-demo-form input {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  color: #fff;
+  padding: 0.58rem 0.68rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.payment-demo-form button {
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  color: white;
+  font-weight: 700;
+  font-family: inherit;
+  padding: 0.65rem;
+  cursor: pointer;
+}
+
+.payment-demo-muted {
+  color: #a1a1aa;
+  font-size: 0.9rem;
+}
+
+.payment-demo-error {
+  color: #fca5a5;
+  font-size: 0.86rem;
+}
+
+.payment-demo-success {
+  color: #86efac;
+  font-size: 0.86rem;
+}
+
+.payment-demo-back {
+  margin-top: 0.9rem;
+  display: inline-flex;
+  color: #c7d2fe;
+  text-decoration: none;
+  font-size: 0.86rem;
+}
