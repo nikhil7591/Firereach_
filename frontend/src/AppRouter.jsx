@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { getStoredProfileDetails, isProfileComplete, isProfileCompletionRequired } from './utils/profile';
 
 const AppPage = lazy(() => import('./pages/AppPage'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
@@ -17,10 +18,20 @@ const getSession = () => {
 };
 
 function ProtectedRoute({ children }) {
+  const location = useLocation();
   const session = typeof window !== 'undefined' ? getSession() : null;
   if (!session?.token) {
     return <Navigate to="/auth" replace />;
   }
+
+  const requiresProfile = typeof window !== 'undefined'
+    && location.pathname.startsWith('/app')
+    && (isProfileCompletionRequired() || !isProfileComplete(getStoredProfileDetails(), session?.user || {}));
+
+  if (requiresProfile) {
+    return <Navigate to="/profile?onboarding=1" replace />;
+  }
+
   return children;
 }
 
@@ -33,15 +44,30 @@ function PublicAuthRoute({ children }) {
 }
 
 function ScrollToTopOnRouteChange() {
-  const { pathname } = useLocation();
+  const { pathname, hash } = useLocation();
 
   useEffect(() => {
     if ('scrollRestoration' in window.history) {
       window.history.scrollRestoration = 'manual';
     }
 
+    if (hash) {
+      const elementId = hash.replace('#', '').trim();
+      const scrollToHash = () => {
+        const target = document.getElementById(elementId);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return;
+        }
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      };
+
+      requestAnimationFrame(scrollToHash);
+      return;
+    }
+
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-  }, [pathname]);
+  }, [pathname, hash]);
 
   return null;
 }

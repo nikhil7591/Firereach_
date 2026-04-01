@@ -72,11 +72,13 @@ class AgentRequest(BaseModel):
     send_mode: str = "auto"
     target_company: str = ""
     test_recipient_email: str = ""
+    sender_profile: dict = {}
 
 
 class SelectCompanyRequest(BaseModel):
     icp: str
     send_mode: str = "manual"
+    sender_profile: dict = {}
     selected_company: dict
 
 
@@ -98,6 +100,7 @@ async def run_agent(request: AgentRequest, stream: bool = True):
             send_mode=request.send_mode,
             target_company=request.target_company,
             test_recipient_email=request.test_recipient_email,
+            sender_profile=request.sender_profile,
         )
 
     async def event_stream():
@@ -113,6 +116,7 @@ async def run_agent(request: AgentRequest, stream: bool = True):
                     send_mode=request.send_mode,
                     target_company=request.target_company,
                     test_recipient_email=request.test_recipient_email,
+                    sender_profile=request.sender_profile,
                     progress_callback=progress_callback,
                 )
                 await queue.put({"type": "result", "data": result})
@@ -146,6 +150,7 @@ async def select_company(request: SelectCompanyRequest):
     return await run_selected_company_workflow(
         icp=request.icp,
         selected_company=request.selected_company,
+        sender_profile=request.sender_profile,
     )
 
 

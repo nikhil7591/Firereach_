@@ -181,6 +181,31 @@ def _one_line(text: str, limit: int = 240) -> str:
     return f"{cleaned[: limit - 3].rstrip()}..."
 
 
+def _normalize_sender_profile(profile: dict | None) -> dict:
+    payload = profile if isinstance(profile, dict) else {}
+    name = _one_line(payload.get("name") or "", 80) or "Nikhil Kumar"
+    email = _one_line(payload.get("contactEmail") or payload.get("email") or "", 120) or "nikhil759100@gmail.com"
+    phone = _one_line(payload.get("phone") or "", 40) or "+91-7807946374"
+    company = _one_line(payload.get("company") or "", 80)
+    role = _one_line(payload.get("role") or "", 80)
+
+    if role and company:
+        title_line = f"{role}, {company}"
+    elif company:
+        title_line = company
+    else:
+        title_line = "Founder, FireReach"
+
+    return {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "company": company,
+        "role": role,
+        "title_line": title_line,
+    }
+
+
 def _build_fallback_email(
     company_name: str,
     recipient_name: str,
@@ -188,6 +213,7 @@ def _build_fallback_email(
     icp: str,
     research_brief: str,
     recipient_role: str,
+    sender_profile: dict,
 ) -> dict:
     fallback_subject = f"FireReach AI Outreach - {company_name}"
     role_line = _one_line(recipient_role) or "your team"
@@ -206,9 +232,10 @@ For {role_line}, this may be relevant because {icp_line or 'your team is likely 
 Would you be open to a short 15-minute conversation next week?
 
 Best regards,
-Nikhil Kumar
-Founder, FireReach
-Phone: +91-7807946374"""
+{sender_profile['name']}
+{sender_profile['title_line']}
+Phone: {sender_profile['phone']}
+Email: {sender_profile['email']}"""
 
     return {
         "subject": fallback_subject,
@@ -224,6 +251,7 @@ def _try_generate_email_payload(
     icp: str,
     research_brief: str,
     recipient_role: str,
+    sender_profile: dict,
 ) -> tuple[dict, str | None]:
     """
     Generates outreach payload via Groq; retries briefly on rate-limit and falls back to deterministic template.
@@ -263,6 +291,7 @@ def _try_generate_email_payload(
         icp,
         research_brief,
         recipient_role,
+        sender_profile,
     )
     return fallback_payload, str(last_error) if last_error else "Unknown Groq error"
 
@@ -280,28 +309,16 @@ def _select_best_pdf(role: str, icp: str = "") -> str:
     icp_text = str(icp or "").lower()
     merged = f"{role_text} {icp_text}".strip()
 
+    # Check specific roles first before general ones to avoid overlaps
     role_mapping = [
-        # Prioritize specific function roles before broad leadership titles.
-        (["cto", "vp engineering", "head of engineering", "engineering", "tech"], "pitch_cto.pdf"),
-        (["cpo", "vp product", "head of product", "product manager", "product"], "pitch_product.pdf"),
-        (["hr", "talent", "people", "recruiter", "human resources"], "pitch_hr.pdf"),
-        (["cfo", "finance", "investor", "financial"], "pitch_investor.pdf"),
-        (["ceo", "founder", "co-founder", "managing director", "md"], "pitch_founder.pdf"),
-    ]
-
-    icp_bias = [
-        (["hr", "talent", "recruit", "hiring"], "pitch_hr.pdf"),
-        (["product", "roadmap", "pmf"], "pitch_product.pdf"),
-        (["finance", "fund", "invest", "cfo"], "pitch_investor.pdf"),
-        (["cto", "engineering", "developer", "tech", "ai"], "pitch_cto.pdf"),
-        (["founder", "ceo", "growth", "strategy"], "pitch_founder.pdf"),
+        (["cto", "chief technology officer", "vp engineering", "head engineer", "tech lead", "engineering lead", "principal engineer"], "pitch_cto.pdf"),
+        (["cpo", "chief product officer", "vp product", "head of product", "product manager", "pm", "product owner", "product lead"], "pitch_product.pdf"),
+        (["hr director", "head of hr", "chief people", "talent director", "people operations", "recruitment director", "hr manager"], "pitch_hr.pdf"),
+        (["cfo", "chief financial officer", "vp finance", "finance director", "controller", "accounting", "treasurer", "investor relations"], "pitch_investor.pdf"),
+        (["ceo", "chief executive officer", "founder", "co-founder", "president"], "pitch_founder.pdf"),
     ]
 
     for keywords, filename in role_mapping:
-        if any(keyword in role_text for keyword in keywords):
-            return filename
-
-    for keywords, filename in icp_bias:
         if any(keyword in merged for keyword in keywords):
             return filename
 
@@ -315,6 +332,7 @@ def tool_outreach_automated_sender(
     signals: dict,
     icp: str,
     send_now: bool = True,
+    sender_profile: dict | None = None,
 ) -> dict:
     """
     Generates a personalized outreach email based on research and signals, then sends it via SMTP.
@@ -343,9 +361,15 @@ def tool_outreach_automated_sender(
     signal_line = _extract_company_signal(signals)
     pdf_filename = _select_best_pdf(recipient_role, icp)
     pdf_path = _resolve_pitch_path(pdf_filename)
+    resolved_sender = _normalize_sender_profile(sender_profile)
+    signature_block = f"""Best regards,
+{resolved_sender['name']}
+{resolved_sender['title_line']}
+Phone: {resolved_sender['phone']}
+Email: {resolved_sender['email']}"""
 
     prompt = f"""
-You are an expert B2B sales development representative writing a cold outreach email on behalf of Nikhil Kumar, founder of FireReach.
+You are an expert B2B sales development representative writing a cold outreach email on behalf of {resolved_sender['name']}.
 
 Write a polished, professional, and highly personalized cold outreach email using the information below.
 
@@ -363,6 +387,12 @@ STRONGEST BUYING SIGNAL (reference this naturally in the opening):
 
 ICP CONTEXT (what Nikhil is offering):
 {icp}
+
+SENDER PROFILE (use this to personalize voice and signature):
+- Name: {resolved_sender['name']}
+- Title: {resolved_sender['title_line']}
+- Email: {resolved_sender['email']}
+- Phone: {resolved_sender['phone']}
 ---
 
 STRICT RULES:
@@ -377,14 +407,10 @@ STRICT RULES:
 9. Do NOT fabricate any facts not present in the research brief or signal.
 10. Tone: professional, warm, confident, concise — NOT salesy or robotic.
 11. Total length: 150-200 words maximum (excluding subject and signature).
-12. Write from Nikhil's individual perspective only. Use I/my language, never our team/we/us.
+12. Write from the sender's individual perspective only. Use I/my language, never our team/we/us.
 
 SIGNATURE BLOCK (copy exactly, do not modify):
-Best regards,
-Nikhil Kumar
-Founder, FireReach
-Phone: +91-7807946374
-Email: nikhil759100@gmail.com
+{signature_block}
 """
 
     email_payload, generation_error = _try_generate_email_payload(
@@ -395,6 +421,7 @@ Email: nikhil759100@gmail.com
         icp=icp,
         research_brief=research_brief,
         recipient_role=recipient_role,
+        sender_profile=resolved_sender,
     )
     subject = str(email_payload.get("subject", f"FireReach AI Outreach - {company_name}")).strip()
     email_content = _normalize_individual_voice(_extract_body_from_json_like(email_payload.get("body", "")))

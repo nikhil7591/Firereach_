@@ -4,6 +4,8 @@ import { Link, useParams } from 'react-router-dom';
 import { getDemoPaymentSession, submitDemoPayment } from '../services/api';
 import './PaymentDemoPage.css';
 
+const PAYMENT_SYNC_KEY = 'firereach_payment_sync';
+
 function formatCountdown(expiresAt) {
   const diff = Math.max(0, new Date(expiresAt).getTime() - Date.now());
   const totalSeconds = Math.floor(diff / 1000);
@@ -20,6 +22,7 @@ export default function PaymentDemoPage() {
   const [paymentCode, setPaymentCode] = useState('');
   const [payment, setPayment] = useState(null);
   const [countdown, setCountdown] = useState('00:00');
+  const [closeCountdown, setCloseCountdown] = useState(15);
 
   useEffect(() => {
     let mounted = true;
@@ -71,6 +74,74 @@ export default function PaymentDemoPage() {
 
     return () => window.clearInterval(timer);
   }, [payment?.expiresAt, payment?.status]);
+
+  useEffect(() => {
+    if (payment?.status !== 'paid') {
+      return;
+    }
+
+    const planLabel = payment?.plan === 'PRO' ? 'Popular' : payment?.plan === 'ENTERPRISE' ? 'Custom' : 'Free';
+    const payload = {
+      type: 'firereach-payment-success',
+      sessionId,
+      plan: payment?.plan,
+      planLabel,
+      at: Date.now(),
+    };
+
+    try {
+      window.localStorage.setItem(PAYMENT_SYNC_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore storage issues.
+    }
+
+    if (window.opener && !window.opener.closed) {
+      try {
+        window.opener.postMessage(payload, window.location.origin);
+      } catch {
+        // Ignore cross-window messaging failures.
+      }
+    }
+
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(740, audioContext.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(1120, audioContext.currentTime + 0.16);
+      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.14, audioContext.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.34);
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.35);
+      window.setTimeout(() => {
+        audioContext.close().catch(() => {});
+      }, 500);
+    } catch {
+      // Ignore browsers that block autoplay audio.
+    }
+
+    setCloseCountdown(15);
+    let remaining = 15;
+
+    const tick = window.setInterval(() => {
+      remaining -= 1;
+      setCloseCountdown(Math.max(remaining, 0));
+      if (remaining <= 0) {
+        window.clearInterval(tick);
+        if (window.opener && !window.opener.closed) {
+          window.close();
+          return;
+        }
+        window.location.assign('/?payment=success');
+      }
+    }, 1000);
+
+    return () => window.clearInterval(tick);
+  }, [payment?.plan, payment?.status, sessionId]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -145,9 +216,16 @@ export default function PaymentDemoPage() {
             )}
 
             {payment.status === 'paid' && (
-              <p className="payment-demo-success">
-                Payment received. You can return to FireReach, your plan and credits will auto-update.
-              </p>
+              <div className="payment-demo-success-wrap" role="status" aria-live="polite">
+                <div className="payment-demo-success-icon" aria-hidden="true">
+                  <span>✓</span>
+                </div>
+                <p className="payment-demo-success-title">Payment Successful</p>
+                <p className="payment-demo-success">
+                  Payment successful, now you are in {payment.plan === 'PRO' ? 'Popular' : payment.plan === 'ENTERPRISE' ? 'Custom' : 'Free'} plan.
+                </p>
+                <p className="payment-demo-muted">This page will auto-close in {closeCountdown}s.</p>
+              </div>
             )}
 
             {payment.status === 'expired' && (

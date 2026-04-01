@@ -15,6 +15,14 @@ import './Landing.css';
 
 function Landing() {
   useEffect(() => {
+    if (window.location.hash) {
+      const id = window.location.hash.replace('#', '').trim();
+      const target = document.getElementById(id);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+    }
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
 

@@ -19,6 +19,12 @@ import { useSearchParams } from 'react-router-dom';
 
 import './App.css';
 import api, { API_URL } from './services/api';
+import {
+  getStoredProfileDetails,
+  isProfileComplete,
+  markProfileCompletionRequired,
+  normalizeProfileDetails,
+} from './utils/profile';
 
 const {
   runAgentStream,
@@ -273,6 +279,32 @@ const resolveRecipientName = (contactName, testRecipientOverride) => {
   }
 
   return String(contactName || '').trim();
+};
+
+const getSenderProfile = (sessionUser = {}) => normalizeProfileDetails(getStoredProfileDetails(), sessionUser);
+
+const applySenderSignature = (body, senderProfile) => {
+  const currentBody = extractBodyFromJsonLike(body);
+  const profile = normalizeProfileDetails(senderProfile || {}, {});
+  const senderName = profile.name || 'Nikhil Kumar';
+  const senderEmail = profile.contactEmail || 'nikhil759100@gmail.com';
+  const senderPhone = profile.phone || '+91-7807946374';
+  const senderTitle = profile.role && profile.company
+    ? `${profile.role}, ${profile.company}`
+    : profile.company
+      ? profile.company
+      : 'Founder, FireReach';
+
+  const signature = [
+    'Best regards,',
+    senderName,
+    senderTitle,
+    `Phone: ${senderPhone}`,
+    `Email: ${senderEmail}`,
+  ].join('\n');
+
+  const strippedBody = currentBody.replace(/\n*Best regards,[\s\S]*$/i, '').trim();
+  return `${strippedBody}\n\n${signature}`.trim();
 };
 
 const isStandaloneNameLine = (line) => /^[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3},?$/.test(String(line || '').trim());
@@ -667,7 +699,7 @@ function App() {
     setHistoryDetailItem(null);
   };
 
-  const handleStreamEvent = (event) => {
+  const handleStreamEvent = useCallback((event) => {
     if (event.type === 'step') {
       updateStep(event.step, event.status, event.message || '');
 
@@ -697,10 +729,24 @@ function App() {
     }
 
     if (event.type === 'result') {
-      setResult(event.data);
-      setRankings(event.data?.rankings || []);
-      hydrateTemplateAndRecipients(event.data);
-      saveHistoryOnly(event.data, {
+      const resultData = event.data;
+      setResult(resultData);
+      setRankings(resultData?.rankings || []);
+      hydrateTemplateAndRecipients(resultData);
+
+      // Enhance result with step-by-step workflow content
+      const enrichedResult = {
+        ...resultData,
+        workflow_steps: steps.map(step => ({
+          id: step.id,
+          label: step.label,
+          status: step.status,
+          message: step.message,
+        })),
+        step_timestamp: new Date().toISOString(),
+      };
+
+      saveHistoryOnly(enrichedResult, {
         icp,
         send_mode: sendMode,
         target_company: targetCompany,
@@ -715,7 +761,7 @@ function App() {
       setError(safeMessage);
       markRunningStepFailed(safeMessage);
     }
-  };
+  }, [icp, sendMode, targetCompany, testRecipientEmail, steps, saveHistoryOnly]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -723,6 +769,14 @@ function App() {
 
     if (!sessionToken) {
       setError('Please login again to continue.');
+      return;
+    }
+
+    const senderProfile = getSenderProfile(session?.user || {});
+    if (!isProfileComplete(senderProfile, session?.user || {})) {
+      markProfileCompletionRequired(true);
+      setError('Please complete your profile first (Name, Phone Number, Email ID).');
+      window.location.assign('/profile?onboarding=1');
       return;
     }
 
@@ -795,6 +849,7 @@ function App() {
         send_mode: sendMode,
         target_company: targetCompany,
         test_recipient_email: testRecipientEmail,
+        sender_profile: senderProfile,
       }, handleStreamEvent);
     } catch (streamError) {
       console.error(streamError);
@@ -837,26 +892,27 @@ function App() {
   const buildRecipientAwareTemplate = useCallback((company, baseTemplate, selectedContactEmail = '') => {
     const selectedContact = (company.contacts || []).find((contact) => contact.email === selectedContactEmail);
     const testRecipientOverride = String(testRecipientEmail || '').trim();
+    const senderProfile = getSenderProfile(session?.user || {});
 
     if (!selectedContactEmail && !testRecipientOverride) {
       return {
         subject: baseTemplate.subject,
-        email_content: baseTemplate.email_content,
+        email_content: applySenderSignature(baseTemplate.email_content, senderProfile),
       };
     }
 
     return {
       subject: baseTemplate.subject,
-      email_content: replaceDesignationForRecipient(
+      email_content: applySenderSignature(replaceDesignationForRecipient(
         updateGreetingWithRecipient(
           baseTemplate.email_content,
           resolveRecipientName(selectedContact?.person_name, testRecipientOverride),
         ),
         company?.suggested_contact?.role,
         selectedContact?.role,
-      ),
+      ), senderProfile),
     };
-  }, [testRecipientEmail]);
+  }, [session?.user, testRecipientEmail]);
 
   const getResolvedTemplateForCompany = useCallback((company) => {
     const companyKey = company.company_name;
@@ -901,6 +957,7 @@ function App() {
       const response = await selectCompany({
         icp,
         send_mode: 'manual',
+        sender_profile: getSenderProfile(session?.user || {}),
         selected_company: {
           company_name: company.company_name,
           industry: company.industry,
@@ -1093,30 +1150,16 @@ function App() {
     const roleText = String(role || '').toLowerCase();
     const merged = `${roleText} ${String(icpText || '').toLowerCase()}`.trim();
 
+    // Check specific roles first before general ones to avoid overlaps
     const roleMapping = [
-      // Prioritize specific function roles before leadership titles.
-      { keywords: ['cto', 'vp engineering', 'head of engineering', 'engineering', 'tech'], filename: 'pitch_cto.pdf' },
-      { keywords: ['cpo', 'vp product', 'head of product', 'product manager', 'product'], filename: 'pitch_product.pdf' },
-      { keywords: ['hr', 'talent', 'people', 'recruiter', 'human resources'], filename: 'pitch_hr.pdf' },
-      { keywords: ['cfo', 'finance', 'investor', 'financial'], filename: 'pitch_investor.pdf' },
-      { keywords: ['ceo', 'founder', 'co-founder', 'managing director', 'md'], filename: 'pitch_founder.pdf' },
-    ];
-
-    const icpBias = [
-      { keywords: ['hr', 'talent', 'recruit', 'hiring'], filename: 'pitch_hr.pdf' },
-      { keywords: ['product', 'roadmap', 'pmf'], filename: 'pitch_product.pdf' },
-      { keywords: ['finance', 'fund', 'invest', 'cfo'], filename: 'pitch_investor.pdf' },
-      { keywords: ['cto', 'engineering', 'developer', 'tech', 'ai'], filename: 'pitch_cto.pdf' },
-      { keywords: ['founder', 'ceo', 'growth', 'strategy'], filename: 'pitch_founder.pdf' },
+      { keywords: ['cto', 'chief technology officer', 'vp engineering', 'head engineer', 'tech lead', 'engineering lead', 'principal engineer'], filename: 'pitch_cto.pdf' },
+      { keywords: ['cpo', 'chief product officer', 'vp product', 'head of product', 'product manager', 'pm', 'product owner', 'product lead'], filename: 'pitch_product.pdf' },
+      { keywords: ['hr director', 'head of hr', 'chief people', 'talent director', 'people operations', 'recruitment director', 'hr manager'], filename: 'pitch_hr.pdf' },
+      { keywords: ['cfo', 'chief financial officer', 'vp finance', 'finance director', 'controller', 'accounting', 'treasurer', 'investor relations'], filename: 'pitch_investor.pdf' },
+      { keywords: ['ceo', 'chief executive officer', 'founder', 'co-founder', 'president'], filename: 'pitch_founder.pdf' },
     ];
 
     for (const item of roleMapping) {
-      if (item.keywords.some((keyword) => roleText.includes(keyword))) {
-        return item.filename;
-      }
-    }
-
-    for (const item of icpBias) {
       if (item.keywords.some((keyword) => merged.includes(keyword))) {
         return item.filename;
       }
@@ -1156,10 +1199,12 @@ function App() {
     const finalEmailContent = testRecipientName
       ? updateGreetingWithRecipient(finalContent, testRecipientName)
       : finalContent;
+    const senderProfile = getSenderProfile(session?.user || {});
+    const signedEmailContent = applySenderSignature(finalEmailContent, senderProfile);
     const roleForPdf = chosenContact?.role || company?.suggested_contact?.role || '';
     const finalPdfFilename = selectBestPdfForRole(roleForPdf, icp);
 
-    if (!finalRecipient || !finalSubject || !finalEmailContent) {
+    if (!finalRecipient || !finalSubject || !signedEmailContent) {
       setError(testRecipientOverride
         ? 'Email subject/content is missing for manual send.'
         : 'Please select one recipient contact before sending.');
@@ -1171,7 +1216,7 @@ function App() {
       const sendResult = await sendGeneratedEmail({
         recipient: finalRecipient,
         subject: finalSubject,
-        email_content: finalEmailContent,
+        email_content: signedEmailContent,
         pdf_filename: finalPdfFilename,
       });
 

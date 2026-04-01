@@ -2,6 +2,13 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { login, signup } from '../services/api';
+import {
+  getStoredProfileDetails,
+  isProfileComplete,
+  markProfileCompletionRequired,
+  normalizeProfileDetails,
+  PROFILE_DETAILS_KEY,
+} from '../utils/profile';
 
 import './AuthPage.css';
 
@@ -88,8 +95,21 @@ function AuthPage() {
 
       window.localStorage.setItem('firereach_session', JSON.stringify(sessionPayload));
       window.localStorage.setItem('firereach_user', JSON.stringify(response.user));
+
+      if (mode === 'signup') {
+        const existing = getStoredProfileDetails();
+        const normalized = normalizeProfileDetails(existing, response.user || {});
+        window.localStorage.setItem(PROFILE_DETAILS_KEY, JSON.stringify(normalized));
+        const completed = isProfileComplete(normalized, response.user || {});
+        markProfileCompletionRequired(!completed);
+      }
+
       window.dispatchEvent(new Event('firereach-session-updated'));
-      navigate('/');
+      if (mode === 'signup') {
+        navigate('/profile?onboarding=1');
+      } else {
+        navigate('/');
+      }
     } catch (requestError) {
       const message = requestError?.response?.data?.message || requestError?.message || 'Authentication request failed.';
       setError(message);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
 import {
@@ -7,11 +7,19 @@ import {
   getCreditsStatus,
   getSearchHistoryList,
   getAccountPlan,
+  updateUserProfile,
 } from '../services/api';
 import SectionWrapper from '../components/ui/SectionWrapper';
 import ProfileCard from '../components/ui/ProfileCard';
 import StatCard from '../components/ui/StatCard';
 import ProgressBar from '../components/ui/ProgressBar';
+import {
+  getStoredProfileDetails,
+  isProfileComplete,
+  markProfileCompletionRequired,
+  normalizeProfileDetails,
+  PROFILE_DETAILS_KEY,
+} from '../utils/profile';
 
 const SESSION_KEY = 'firereach_session';
 
@@ -33,15 +41,22 @@ const formatDate = (value) => {
 };
 
 export default function ProfilePage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [session, setSession] = useState(() => getSession());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState('');
   const [user, setUser] = useState(null);
   const [plan, setPlan] = useState(null);
   const [credits, setCredits] = useState(null);
   const [history, setHistory] = useState([]);
+  const [profileForm, setProfileForm] = useState(() => normalizeProfileDetails(getStoredProfileDetails(), getSession()?.user || {}));
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const token = session?.token || '';
+  const onboardingMode = searchParams.get('onboarding') === '1';
 
   useEffect(() => {
     const sync = () => setSession(getSession());
@@ -72,6 +87,13 @@ export default function ProfilePage() {
         ]);
         if (!active) return;
         setUser(meRes.user || null);
+        setProfileForm((prev) => ({
+          ...normalizeProfileDetails(getStoredProfileDetails(), meRes.user || {}),
+          company: prev.company || normalizeProfileDetails(getStoredProfileDetails(), meRes.user || {}).company,
+          role: prev.role || normalizeProfileDetails(getStoredProfileDetails(), meRes.user || {}).role,
+          website: prev.website || normalizeProfileDetails(getStoredProfileDetails(), meRes.user || {}).website,
+          icpFocus: prev.icpFocus || normalizeProfileDetails(getStoredProfileDetails(), meRes.user || {}).icpFocus,
+        }));
         setPlan(planRes || null);
         setCredits(creditRes || null);
         setHistory(Array.isArray(historyRes.history) ? historyRes.history : []);
@@ -97,6 +119,50 @@ export default function ProfilePage() {
   const creditsRemaining = Number(credits?.creditsRemaining ?? user?.creditsRemaining ?? 0);
   const monthlyCredits = Number(credits?.monthlyCredits ?? user?.monthlyCredits ?? 0);
   const usedPercent = monthlyCredits > 0 ? Math.round(((monthlyCredits - creditsRemaining) / monthlyCredits) * 100) : 0;
+  const profileCompleted = isProfileComplete(profileForm, user || session?.user || {});
+
+  const saveProfileDetails = async () => {
+    const payload = normalizeProfileDetails(profileForm, user || session?.user || {});
+    setSaveError('');
+    setSaveSuccess('');
+
+    if (!payload.name) {
+      setSaveError('Name is required.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.contactEmail)) {
+      setSaveError('Valid email id is required.');
+      return;
+    }
+    if (!/^\d{10}$/.test(payload.phone)) {
+      setSaveError('Phone number must be exactly 10 digits.');
+      return;
+    }
+
+    setSavingProfile(true);
+    try {
+      if (token) {
+        const response = await updateUserProfile(token, { name: payload.name });
+        const nextSession = {
+          ...(getSession() || {}),
+          user: response.user,
+        };
+        window.localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession));
+        window.localStorage.setItem('firereach_user', JSON.stringify(response.user));
+        setUser(response.user);
+      }
+
+      window.localStorage.setItem(PROFILE_DETAILS_KEY, JSON.stringify(payload));
+      markProfileCompletionRequired(false);
+      window.dispatchEvent(new Event('firereach-session-updated'));
+      setSaveSuccess('Profile saved successfully. You can now run outreach flow.');
+    } catch (saveProfileError) {
+      console.error('Profile save failed:', saveProfileError);
+      setSaveError('Unable to save profile right now. Please retry.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   const recentActivity = history.slice(0, 3).map((item) => ({
     id: item.id,
@@ -118,7 +184,80 @@ export default function ProfilePage() {
         </div>
 
         {error && <div className="rounded-lg border border-rose-400/35 bg-rose-500/10 text-rose-300 px-3 py-2 text-sm">{error}</div>}
+        {onboardingMode && !profileCompleted && (
+          <div className="rounded-lg border border-amber-400/35 bg-amber-500/10 text-amber-200 px-3 py-2 text-sm">
+            Complete your profile first. Name, phone number, and email id are mandatory before running the app.
+          </div>
+        )}
         {loading && <div className="rounded-lg border border-white/10 bg-white/[0.03] text-[#A1A1AA] px-3 py-2 text-sm">Fetching latest profile data...</div>}
+
+        <div id="profile-completion-form">
+        <SectionWrapper title="Profile Completion" subtitle="Mandatory details required for personalized email outreach.">
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <p className="text-[#A1A1AA] text-xs uppercase tracking-[0.12em]">Mandatory</p>
+              <input
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2"
+                placeholder="Full Name *"
+                value={profileForm.name}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, name: event.target.value }))}
+              />
+              <input
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2"
+                placeholder="Phone Number *"
+                value={profileForm.phone}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, phone: event.target.value }))}
+              />
+              <input
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2"
+                placeholder="Email ID *"
+                value={profileForm.contactEmail}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, contactEmail: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-[#A1A1AA] text-xs uppercase tracking-[0.12em]">Optional</p>
+              <input
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2"
+                placeholder="Company"
+                value={profileForm.company}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, company: event.target.value }))}
+              />
+              <input
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2"
+                placeholder="Role"
+                value={profileForm.role}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, role: event.target.value }))}
+              />
+              <input
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2"
+                placeholder="Website"
+                value={profileForm.website}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, website: event.target.value }))}
+              />
+              <textarea
+                className="w-full rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2 min-h-[90px]"
+                placeholder="ICP Focus / Best-fit customer notes"
+                value={profileForm.icpFocus}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, icpFocus: event.target.value }))}
+              />
+            </div>
+          </div>
+          {saveError && <div className="mt-3 rounded-lg border border-rose-400/35 bg-rose-500/10 text-rose-300 px-3 py-2 text-sm">{saveError}</div>}
+          {saveSuccess && <div className="mt-3 rounded-lg border border-emerald-400/35 bg-emerald-500/10 text-emerald-300 px-3 py-2 text-sm">{saveSuccess}</div>}
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={saveProfileDetails}
+              disabled={savingProfile}
+              className="rounded-lg border border-indigo-400/45 bg-indigo-500/20 text-white text-sm px-4 py-2"
+            >
+              {savingProfile ? 'Saving...' : 'Save Profile'}
+            </button>
+            <span className="text-xs text-[#A1A1AA]">Status: {profileCompleted ? 'Completed' : 'Incomplete'}</span>
+          </div>
+        </SectionWrapper>
+        </div>
 
         <div className="grid lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
@@ -135,8 +274,20 @@ export default function ProfilePage() {
 
           <SectionWrapper title="Actions" subtitle="Quick account actions" delay={0.06}>
             <div className="space-y-2">
-              <motion.button whileHover={{ scale: 1.02 }} className="w-full rounded-lg border border-indigo-400/40 bg-indigo-500/20 px-3 py-2 text-white text-sm">Edit Profile</motion.button>
-              <motion.button whileHover={{ scale: 1.02 }} className="w-full rounded-lg border border-orange-400/40 bg-orange-500/20 px-3 py-2 text-white text-sm">Upgrade Plan</motion.button>
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                onClick={() => document.getElementById('profile-completion-form')?.scrollIntoView({ behavior: 'smooth' })}
+                className="w-full rounded-lg border border-indigo-400/40 bg-indigo-500/20 px-3 py-2 text-white text-sm"
+              >
+                Edit Profile
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                onClick={() => navigate('/#pricing')}
+                className="w-full rounded-lg border border-orange-400/40 bg-orange-500/20 px-3 py-2 text-white text-sm"
+              >
+                Upgrade Plan
+              </motion.button>
             </div>
           </SectionWrapper>
         </div>

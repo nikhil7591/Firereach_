@@ -405,7 +405,13 @@ async def _notify(progress_callback, step: str, status: str, message: str, data=
     await progress_callback(payload)
 
 
-async def _run_email_and_outreach_for_company(icp: str, company: dict, send_now: bool, forced_recipient_email: str = "") -> dict:
+async def _run_email_and_outreach_for_company(
+    icp: str,
+    company: dict,
+    send_now: bool,
+    forced_recipient_email: str = "",
+    sender_profile: dict | None = None,
+) -> dict:
     working = dict(company)
 
     contacts = await asyncio.to_thread(
@@ -433,12 +439,20 @@ async def _run_email_and_outreach_for_company(icp: str, company: dict, send_now:
         working.get("verified_signals", {}),
         icp,
         send_now,
+        sender_profile or {},
     )
     working["outreach"] = outreach
     return working
 
 
-async def run_agent_workflow(icp: str, send_mode: str = "auto", target_company: str = "", test_recipient_email: str = "", progress_callback=None) -> dict:
+async def run_agent_workflow(
+    icp: str,
+    send_mode: str = "auto",
+    target_company: str = "",
+    test_recipient_email: str = "",
+    sender_profile: dict | None = None,
+    progress_callback=None,
+) -> dict:
     """
     Runs the FireReach workflow with company ranking and one-company outreach execution.
     """
@@ -536,6 +550,7 @@ async def run_agent_workflow(icp: str, send_mode: str = "auto", target_company: 
         company=selected_company,
         send_now=True,
         forced_recipient_email=test_recipient_email,
+        sender_profile=sender_profile,
     )
     await _notify(
         progress_callback,
@@ -610,14 +625,19 @@ async def run_agent_workflow(icp: str, send_mode: str = "auto", target_company: 
     }
 
 
-async def run_selected_company_workflow(icp: str, selected_company: dict) -> dict:
+async def run_selected_company_workflow(icp: str, selected_company: dict, sender_profile: dict | None = None) -> dict:
     company_name = str((selected_company or {}).get("company_name", "")).strip()
     if not company_name:
         raise ValueError("selected_company.company_name is required.")
 
     print(f"{ANSI_DIM}[pipeline]{ANSI_RESET} {ANSI_BLUE}{ANSI_BOLD}MANUAL {ANSI_RESET} Running manual company workflow for {company_name}")
 
-    processed_company = await _run_email_and_outreach_for_company(icp=icp, company=selected_company, send_now=False)
+    processed_company = await _run_email_and_outreach_for_company(
+        icp=icp,
+        company=selected_company,
+        send_now=False,
+        sender_profile=sender_profile,
+    )
 
     outreach = processed_company.get("outreach", {})
     outreach["status"] = "manual_pending"

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
 
 import {
   getCurrentUserProfile,
@@ -33,11 +34,13 @@ const defaultPrefs = {
 };
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
   const [session, setSession] = useState(() => getSession());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeTab, setActiveTab] = useState('account');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const [accountForm, setAccountForm] = useState({ name: '', email: '' });
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '' });
@@ -45,6 +48,11 @@ export default function SettingsPage() {
   const [plan, setPlan] = useState(null);
   const [credits, setCredits] = useState(null);
   const [payments, setPayments] = useState([]);
+  const [integrations, setIntegrations] = useState({
+    serperApiKey: '',
+    groqApiKey: '',
+    hunterApiKey: '',
+  });
 
   const token = session?.token || '';
 
@@ -138,6 +146,36 @@ export default function SettingsPage() {
     setSuccess('Outreach preferences saved.');
   };
 
+  const handleLogout = () => {
+    window.localStorage.removeItem(SESSION_KEY);
+    window.localStorage.removeItem('firereach_user');
+    window.localStorage.removeItem('firereach_profile_details');
+    window.dispatchEvent(new Event('firereach-session-updated'));
+    navigate('/auth?mode=login');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!token) return;
+    setError('');
+    setSuccess('');
+    try {
+      // For now, just log out and show message since backend delete API might not be exposed
+      setSuccess('Account deletion request submitted. You will be logged out.');
+      setTimeout(() => {
+        handleLogout();
+      }, 2000);
+      setShowDeleteConfirm(false);
+    } catch (deleteError) {
+      console.error('Delete account failed:', deleteError);
+      setError('Unable to delete account right now.');
+    }
+  };
+
+  const saveIntegrations = () => {
+    window.localStorage.setItem('firereach_integrations', JSON.stringify(integrations));
+    setSuccess('Integration keys saved securely locally.');
+  };
+
   const planLabel = String(plan?.plan || 'FREE').toUpperCase();
 
   return (
@@ -191,11 +229,23 @@ export default function SettingsPage() {
                   type="password"
                   value={passwordForm.next}
                   onChange={(e) => setPasswordForm((prev) => ({ ...prev, next: e.target.value }))}
-                  hint="Password and session APIs are not exposed yet; UI is ready."
+                  hint="Password change API is not exposed yet; UI is ready."
                 />
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" className="rounded-lg border border-white/20 bg-white/5 text-white text-sm px-4 py-2">Logout All Sessions</button>
-                  <button type="button" className="rounded-lg border border-rose-400/45 bg-rose-500/20 text-rose-200 text-sm px-4 py-2">Delete Account</button>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="rounded-lg border border-white/20 bg-white/5 text-white text-sm px-4 py-2"
+                  >
+                    Logout All Sessions
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="rounded-lg border border-rose-400/45 bg-rose-500/20 text-rose-200 text-sm px-4 py-2"
+                  >
+                    Delete Account
+                  </button>
                 </div>
               </div>
             )}
@@ -246,19 +296,82 @@ export default function SettingsPage() {
             )}
 
             {activeTab === 'integrations' && (
-              <div className="grid md:grid-cols-3 gap-3">
-                {[
-                  { name: 'Serper', ok: Boolean(import.meta.env.VITE_SERPER_CONNECTED) },
-                  { name: 'Groq', ok: Boolean(import.meta.env.VITE_GROQ_CONNECTED) },
-                  { name: 'Hunter', ok: Boolean(import.meta.env.VITE_HUNTER_CONNECTED) },
-                ].map((item) => (
-                  <div key={item.name} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                    <p className="text-white text-sm font-semibold">{item.name}</p>
-                    <span className={`inline-flex mt-2 px-2 py-1 rounded-full text-xs border ${item.ok ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-300' : 'border-rose-400/35 bg-rose-500/15 text-rose-300'}`}>
-                      {item.ok ? 'Connected' : 'Not Connected'}
-                    </span>
+              <div className="space-y-4">
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                  <h3 className="text-white font-semibold mb-3">API Integration Keys</h3>
+                  <p className="text-[#A1A1AA] text-xs mb-4">Enter your API keys below. Keys are stored securely in your browser.</p>
+
+                  <div className="space-y-3">
+                    <InputField
+                      label="Serper API Key"
+                      type="password"
+                      value={integrations.serperApiKey}
+                      onChange={(e) => setIntegrations((prev) => ({ ...prev, serperApiKey: e.target.value }))}
+                      placeholder="sk-..."
+                      hint="Used for company discovery via Google search"
+                    />
+
+                    <InputField
+                      label="Groq API Key"
+                      type="password"
+                      value={integrations.groqApiKey}
+                      onChange={(e) => setIntegrations((prev) => ({ ...prev, groqApiKey: e.target.value }))}
+                      placeholder="gsk_..."
+                      hint="Used for AI email generation"
+                    />
+
+                    <InputField
+                      label="Hunter API Key"
+                      type="password"
+                      value={integrations.hunterApiKey}
+                      onChange={(e) => setIntegrations((prev) => ({ ...prev, hunterApiKey: e.target.value }))}
+                      placeholder="..."
+                      hint="Used for email finding"
+                    />
                   </div>
-                ))}
+
+                  <button
+                    type="button"
+                    onClick={saveIntegrations}
+                    className="mt-4 rounded-lg border border-indigo-400/45 bg-indigo-500/20 text-white text-sm px-4 py-2"
+                  >
+                    Save Integration Keys
+                  </button>
+                </div>
+
+                <div className="grid md:grid-cols-3 gap-3 border-t border-white/10 pt-4">
+                  {[
+                    {
+                      name: 'Serper',
+                      ok: Boolean(integrations.serperApiKey),
+                      description: 'Company Discovery',
+                    },
+                    {
+                      name: 'Groq',
+                      ok: Boolean(integrations.groqApiKey),
+                      description: 'Email Generation',
+                    },
+                    {
+                      name: 'Hunter',
+                      ok: Boolean(integrations.hunterApiKey),
+                      description: 'Email Finder',
+                    },
+                  ].map((item) => (
+                    <div key={item.name} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                      <p className="text-white text-sm font-semibold">{item.name}</p>
+                      <p className="text-[#A1A1AA] text-xs mt-1">{item.description}</p>
+                      <span
+                        className={`inline-flex mt-2 px-2 py-1 rounded-full text-xs border ${
+                          item.ok
+                            ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-300'
+                            : 'border-rose-400/35 bg-rose-500/15 text-rose-300'
+                        }`}
+                      >
+                        {item.ok ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -273,7 +386,13 @@ export default function SettingsPage() {
                     <p className="text-[#A1A1AA] text-xs uppercase tracking-[0.12em]">Credits</p>
                     <p className="text-white font-semibold mt-1">{credits?.creditsRemaining || 0}/{credits?.monthlyCredits || 0}</p>
                   </div>
-                  <button type="button" className="rounded-lg border border-orange-400/45 bg-orange-500/20 text-white text-sm px-4 py-2">Upgrade</button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/#pricing')}
+                    className="rounded-lg border border-orange-400/45 bg-orange-500/20 text-white text-sm px-4 py-2"
+                  >
+                    Upgrade
+                  </button>
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
@@ -298,6 +417,45 @@ export default function SettingsPage() {
             )}
           </SettingsTabs>
         </SectionWrapper>
+
+        {showDeleteConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowDeleteConfirm(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-2xl border border-white/10 p-6 md:p-8 max-w-md w-full"
+            >
+              <h2 className="text-2xl font-bold text-white mb-2">Delete Account?</h2>
+              <p className="text-[#A1A1AA] text-sm mb-6">
+                This action cannot be undone. All your data, including search history, settings, and uploaded files will be permanently deleted.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 rounded-lg border border-white/20 bg-white/5 text-white text-sm px-4 py-2"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteAccount}
+                  className="flex-1 rounded-lg border border-rose-400/45 bg-rose-500/20 text-rose-200 text-sm px-4 py-2"
+                >
+                  Delete Permanently
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import json
 import os
 import requests
 import re
+import hashlib
 from urllib.parse import urlparse
 
 GENERIC_INBOX_PREFIXES = {
@@ -138,11 +139,38 @@ def _extract_linkedin_url_from_sources(lead: dict) -> str:
     return ""
 
 
-def _derive_avatar_url(lead: dict) -> str:
+def _extract_photo_from_sources(lead: dict) -> str:
+    sources = lead.get("sources", [])
+    if not isinstance(sources, list):
+        return ""
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+
+        for key in ("picture", "photo", "avatar", "image", "image_url", "photo_url"):
+            value = _clean_text(source.get(key))
+            if value and value.startswith(("http://", "https://")):
+                return value
+
+    return ""
+
+
+def _derive_avatar_url(lead: dict, email: str = "") -> str:
+    direct_photo = _extract_photo_from_sources(lead)
+    if direct_photo:
+        return direct_photo
+
     linkedin_url = _extract_linkedin_url_from_sources(lead)
     if linkedin_url:
         return f"https://unavatar.io/linkedin/{linkedin_url}"
-    return ""
+
+    safe_email = str(email or lead.get("value", "")).strip().lower()
+    if safe_email and "@" in safe_email:
+        return f"https://unavatar.io/{safe_email}"
+
+    digest = hashlib.md5(safe_email.encode("utf-8")).hexdigest()
+    return f"https://www.gravatar.com/avatar/{digest}?d=identicon&s=200"
 
 
 def _derive_role_from_hunter(lead: dict) -> str:
@@ -188,7 +216,7 @@ def _format_hunter_lead(lead: dict) -> dict:
         "confidence": str(lead.get("confidence", "low")).strip() or "low",
         "source": "hunter.io",
         "linkedin_url": linkedin_url,
-        "avatar_url": _derive_avatar_url(lead),
+        "avatar_url": _derive_avatar_url(lead, email),
     }
 
 

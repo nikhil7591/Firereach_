@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Clock3, Flame, QrCode, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -39,6 +39,7 @@ const plans = [
 ];
 
 const SESSION_KEY = 'firereach_session';
+const PAYMENT_SYNC_KEY = 'firereach_payment_sync';
 
 const getSession = () => {
   try {
@@ -68,6 +69,7 @@ const formatCountdown = (expiresAt) => {
 
 export default function Pricing() {
   const navigate = useNavigate();
+  const successToastTimerRef = useRef(null);
   const [yearly, setYearly] = useState(false);
   const [session, setSession] = useState(() => getSession());
   const [selectedPlan, setSelectedPlan] = useState(() => String(getSession()?.user?.plan || 'FREE').toUpperCase());
@@ -75,7 +77,9 @@ export default function Pricing() {
   const [busyPlan, setBusyPlan] = useState('');
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentCountdown, setPaymentCountdown] = useState('05:00');
+  const [paymentCloseCountdown, setPaymentCloseCountdown] = useState(15);
   const [paymentError, setPaymentError] = useState('');
+  const [paymentSuccessToast, setPaymentSuccessToast] = useState('');
 
   const sessionToken = session?.token || '';
   const currentPlan = String(session?.user?.plan || 'FREE').toUpperCase();
@@ -102,6 +106,49 @@ export default function Pricing() {
     return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(paymentModal.paymentUrl)}`;
   }, [paymentModal?.paymentUrl]);
 
+  const planDisplayLabel = (planKey) => {
+    if (planKey === 'PRO') {
+      return 'Popular';
+    }
+    if (planKey === 'ENTERPRISE') {
+      return 'Custom';
+    }
+    return 'Free';
+  };
+
+  const markPaymentAsPaid = (user, paidPlan) => {
+    const nextPlan = String(paidPlan || user?.plan || currentPlan || 'FREE').toUpperCase();
+    const baseSession = getSession() || {};
+    const nextUser = user
+      ? { ...user }
+      : {
+          ...(baseSession.user || {}),
+          plan: nextPlan,
+        };
+
+    const nextSession = {
+      ...baseSession,
+      token: baseSession.token || sessionToken,
+      user: nextUser,
+    };
+
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession));
+    window.localStorage.setItem('firereach_user', JSON.stringify(nextUser));
+    window.dispatchEvent(new Event('firereach-session-updated'));
+
+    setSelectedPlan(nextPlan);
+    setPaymentModal((prev) => (prev ? { ...prev, status: 'paid', plan: nextPlan } : prev));
+    setPaymentError('');
+
+    if (successToastTimerRef.current) {
+      window.clearTimeout(successToastTimerRef.current);
+    }
+    setPaymentSuccessToast(`Payment successful. You are now on ${planDisplayLabel(nextPlan)} plan.`);
+    successToastTimerRef.current = window.setTimeout(() => {
+      setPaymentSuccessToast('');
+    }, 6000);
+  };
+
   useEffect(() => {
     if (!paymentModal?.expiresAt || paymentModal?.status !== 'pending') {
       return;
@@ -123,17 +170,8 @@ export default function Pricing() {
     const poll = window.setInterval(async () => {
       try {
         const status = await getDemoPaymentStatus(sessionToken, paymentModal.paymentSessionId);
-        if (status?.status === 'paid' && status?.user) {
-          const nextSession = {
-            ...(getSession() || {}),
-            token: sessionToken,
-            user: status.user,
-          };
-          window.localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession));
-          window.localStorage.setItem('firereach_user', JSON.stringify(status.user));
-          window.dispatchEvent(new Event('firereach-session-updated'));
-          setSelectedPlan(String(status.user.plan || 'FREE').toUpperCase());
-          setPaymentModal((prev) => prev ? { ...prev, status: 'paid' } : prev);
+        if (status?.status === 'paid') {
+          markPaymentAsPaid(status?.user, status?.payment?.plan || paymentModal?.plan);
         }
         if (status?.status === 'expired') {
           setPaymentModal((prev) => prev ? { ...prev, status: 'expired' } : prev);
@@ -145,6 +183,87 @@ export default function Pricing() {
 
     return () => window.clearInterval(poll);
   }, [paymentModal?.paymentSessionId, paymentModal?.status, sessionToken]);
+
+  useEffect(() => {
+    if (!paymentModal?.paymentSessionId || paymentModal?.status !== 'pending' || !sessionToken) {
+      return;
+    }
+
+    const syncFromServer = async (sessionId) => {
+      if (!sessionId || sessionId !== paymentModal.paymentSessionId) {
+        return;
+      }
+      try {
+        const status = await getDemoPaymentStatus(sessionToken, sessionId);
+        if (status?.status === 'paid') {
+          markPaymentAsPaid(status?.user, status?.payment?.plan || paymentModal?.plan);
+        }
+      } catch {
+        // Ignore transient failures; polling continues.
+      }
+    };
+
+    const onPaymentMessage = (event) => {
+      if (event.origin !== window.location.origin) {
+        return;
+      }
+      if (event.data?.type !== 'firereach-payment-success') {
+        return;
+      }
+      syncFromServer(event.data.sessionId);
+    };
+
+    const onStorage = (event) => {
+      if (event.key !== PAYMENT_SYNC_KEY || !event.newValue) {
+        return;
+      }
+      try {
+        const data = JSON.parse(event.newValue);
+        if (data?.type !== 'firereach-payment-success') {
+          return;
+        }
+        syncFromServer(data.sessionId);
+      } catch {
+        // Ignore malformed sync payload.
+      }
+    };
+
+    window.addEventListener('message', onPaymentMessage);
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      window.removeEventListener('message', onPaymentMessage);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [paymentModal?.paymentSessionId, paymentModal?.status, paymentModal?.plan, sessionToken]);
+
+  useEffect(() => {
+    if (paymentModal?.status !== 'paid') {
+      return;
+    }
+
+    setPaymentCloseCountdown(15);
+    let remaining = 15;
+
+    const timer = window.setInterval(() => {
+      remaining -= 1;
+      setPaymentCloseCountdown(Math.max(remaining, 0));
+      if (remaining <= 0) {
+        window.clearInterval(timer);
+        setPaymentModal(null);
+      }
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [paymentModal?.status]);
+
+  useEffect(() => {
+    return () => {
+      if (successToastTimerRef.current) {
+        window.clearTimeout(successToastTimerRef.current);
+      }
+    };
+  }, []);
 
   const handlePlanSelect = async (planKey) => {
     setPaymentError('');
@@ -351,6 +470,11 @@ export default function Pricing() {
         {paymentError && (
           <div className="mt-4 text-sm text-rose-300 text-center">{paymentError}</div>
         )}
+        {paymentSuccessToast && (
+          <div className="mt-4 text-sm text-emerald-300 text-center rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3">
+            {paymentSuccessToast}
+          </div>
+        )}
 
         {paymentModal && (
           <div
@@ -384,9 +508,18 @@ export default function Pricing() {
                     <div className="mt-3 flex items-center gap-2 text-sm text-[#A1A1AA]">
                       <QrCode size={14} /> Scan QR from phone to open payment page
                     </div>
-                    <a href={paymentModal.paymentUrl} target="_blank" rel="noreferrer" className="text-sm text-indigo-300 mt-2">
+                    <button
+                      type="button"
+                      className="text-sm text-indigo-300 mt-2 bg-transparent border-none cursor-pointer"
+                      onClick={() => {
+                        const nextTab = window.open(paymentModal.paymentUrl, 'firereach-payment-tab');
+                        if (!nextTab) {
+                          window.location.assign(paymentModal.paymentUrl);
+                        }
+                      }}
+                    >
                       Open Payment Page
-                    </a>
+                    </button>
                     <div className="mt-2 flex items-center gap-2 text-sm text-amber-300">
                       <Clock3 size={14} /> Valid for {paymentCountdown}
                     </div>
@@ -399,7 +532,7 @@ export default function Pricing() {
 
               {paymentModal.status === 'paid' && (
                 <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-emerald-300 text-sm">
-                  Payment successful. Plan upgraded and credits added.
+                  Payment successful. Plan upgraded and credits added. This window will close in {paymentCloseCountdown}s.
                 </div>
               )}
 

@@ -4,9 +4,14 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Menu, X, Flame, LogOut, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { updateUserProfile } from '../../services/api';
+import {
+  getStoredProfileDetails,
+  markProfileCompletionRequired,
+  normalizeProfileDetails,
+  PROFILE_DETAILS_KEY,
+} from '../../utils/profile';
 
 const SESSION_KEY = 'firereach_session';
-const PROFILE_DETAILS_KEY = 'firereach_profile_details';
 const SETTINGS_KEY = 'firereach_settings';
 
 const getSession = () => {
@@ -38,11 +43,14 @@ export default function Navbar() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [profileForm, setProfileForm] = useState({
     name: '',
+    contactEmail: '',
+    phone: '',
     company: '',
     role: '',
     website: '',
     icpFocus: '',
   });
+  const [profileError, setProfileError] = useState('');
   const [settingsForm, setSettingsForm] = useState({
     emailAlerts: true,
     experimentalUI: false,
@@ -76,14 +84,9 @@ export default function Navbar() {
   }, []);
 
   useEffect(() => {
-    const storedProfile = JSON.parse(window.localStorage.getItem(PROFILE_DETAILS_KEY) || '{}');
-    setProfileForm({
-      name: session?.user?.name || storedProfile.name || '',
-      company: storedProfile.company || '',
-      role: storedProfile.role || '',
-      website: storedProfile.website || '',
-      icpFocus: storedProfile.icpFocus || '',
-    });
+    const storedProfile = normalizeProfileDetails(getStoredProfileDetails(), session?.user || {});
+    setProfileForm(storedProfile);
+    setProfileError('');
 
     const storedSettings = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
     setSettingsForm({
@@ -120,16 +123,24 @@ export default function Navbar() {
   };
 
   const saveProfile = async () => {
-    const payload = {
-      ...profileForm,
-      name: String(profileForm.name || '').trim(),
-      company: String(profileForm.company || '').trim(),
-      role: String(profileForm.role || '').trim(),
-      website: String(profileForm.website || '').trim(),
-      icpFocus: String(profileForm.icpFocus || '').trim(),
-    };
+    const payload = normalizeProfileDetails(profileForm, session?.user || {});
+
+    if (!payload.name) {
+      setProfileError('Name is required.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.contactEmail)) {
+      setProfileError('Valid email id is required.');
+      return;
+    }
+    if (!/^\d{10}$/.test(payload.phone)) {
+      setProfileError('Phone number must be exactly 10 digits.');
+      return;
+    }
+    setProfileError('');
 
     window.localStorage.setItem(PROFILE_DETAILS_KEY, JSON.stringify(payload));
+    markProfileCompletionRequired(false);
 
     if (sessionToken && payload.name) {
       try {
@@ -223,14 +234,30 @@ export default function Navbar() {
 
         </div>
 
-        {/* Mobile Toggle */}
-        <button
-          className="md:hidden text-white bg-transparent border-none cursor-pointer"
-          onClick={() => setMobileOpen(!mobileOpen)}
-          aria-label="Toggle menu"
-        >
-          {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-        </button>
+        {/* Mobile Actions */}
+        <div className="md:hidden flex items-center gap-2">
+          {sessionToken && (
+            <button
+              type="button"
+              onClick={() => {
+                setMobileOpen(false);
+                setDropdownOpen((prev) => !prev);
+              }}
+              className="w-9 h-9 rounded-full border border-white/20 bg-white/5 text-white text-sm font-semibold cursor-pointer"
+              aria-label="Open account menu"
+            >
+              {initials}
+            </button>
+          )}
+
+          <button
+            className="text-white bg-transparent border-none cursor-pointer"
+            onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label="Toggle menu"
+          >
+            {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          </button>
+        </div>
       </div>
 
       {/* Mobile Menu */}
@@ -299,12 +326,18 @@ export default function Navbar() {
           <h3 className="text-white text-lg font-semibold mb-4">Profile Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <input className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2" placeholder="Full Name" value={profileForm.name} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} />
-            <input className="rounded-lg border border-white/10 bg-white/5 text-[#A1A1AA] px-3 py-2" value={session?.user?.email || ''} disabled />
+            <input className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2" placeholder="Email ID" value={profileForm.contactEmail} onChange={(e) => setProfileForm((p) => ({ ...p, contactEmail: e.target.value }))} />
+            <input className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2" placeholder="Phone Number" value={profileForm.phone} onChange={(e) => setProfileForm((p) => ({ ...p, phone: e.target.value }))} />
             <input className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2" placeholder="Company" value={profileForm.company} onChange={(e) => setProfileForm((p) => ({ ...p, company: e.target.value }))} />
             <input className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2" placeholder="Role" value={profileForm.role} onChange={(e) => setProfileForm((p) => ({ ...p, role: e.target.value }))} />
             <input className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2 sm:col-span-2" placeholder="Website" value={profileForm.website} onChange={(e) => setProfileForm((p) => ({ ...p, website: e.target.value }))} />
             <textarea className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2 sm:col-span-2 min-h-[110px]" placeholder="ICP Focus / Best-fit customer notes" value={profileForm.icpFocus} onChange={(e) => setProfileForm((p) => ({ ...p, icpFocus: e.target.value }))} />
           </div>
+          {profileError && (
+            <div className="mt-3 rounded-lg border border-rose-400/35 bg-rose-500/10 text-rose-300 px-3 py-2 text-sm">
+              {profileError}
+            </div>
+          )}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" className="rounded-lg border border-white/15 bg-white/5 text-white px-3 py-2 text-sm" onClick={() => setProfileModalOpen(false)}>Cancel</button>
             <button type="button" className="rounded-lg border border-indigo-500/40 bg-indigo-500/20 text-white px-3 py-2 text-sm" onClick={saveProfile}>Save Profile</button>
