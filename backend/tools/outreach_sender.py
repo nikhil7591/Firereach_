@@ -2,6 +2,14 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
+
+try:
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+except Exception:  # pragma: no cover - optional dependency at runtime
+    Credentials = None
+    build = None
 
 from services.email_service import send_email
 from services.groq_client import generate_completion
@@ -323,6 +331,74 @@ def _select_best_pdf(role: str, icp: str = "") -> str:
             return filename
 
     return "pitch_general.pdf"
+
+
+def create_google_meet_link() -> str:
+    """
+    Creates a Google Calendar event with Meet conference and returns hangoutLink.
+    Returns empty string on any failure.
+    """
+    if Credentials is None or build is None:
+        return ""
+
+    client_id = str(os.getenv("GOOGLE_CLIENT_ID", "")).strip()
+    client_secret = str(os.getenv("GOOGLE_CLIENT_SECRET", "")).strip()
+    refresh_token = str(os.getenv("GOOGLE_REFRESH_TOKEN", "")).strip()
+    access_token = str(os.getenv("GOOGLE_ACCESS_TOKEN", "")).strip()
+    calendar_id = str(os.getenv("GOOGLE_CALENDAR_ID", "primary")).strip() or "primary"
+    timezone_name = str(os.getenv("GOOGLE_CALENDAR_TIMEZONE", "UTC")).strip() or "UTC"
+
+    if not client_id or not client_secret or (not refresh_token and not access_token):
+        return ""
+
+    try:
+        creds = Credentials(
+            token=access_token or None,
+            refresh_token=refresh_token or None,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=["https://www.googleapis.com/auth/calendar.events"],
+        )
+
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+        start_dt = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+            hour=11,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        end_dt = start_dt + timedelta(minutes=30)
+
+        event_body = {
+            "summary": "FireReach - Intro Call",
+            "description": "Auto-generated meeting slot from FireReach outreach workflow.",
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": timezone_name,
+            },
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": timezone_name,
+            },
+            "conferenceData": {
+                "createRequest": {
+                    "requestId": f"firereach-{int(time.time() * 1000)}",
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            },
+        }
+
+        created = service.events().insert(
+            calendarId=calendar_id,
+            body=event_body,
+            conferenceDataVersion=1,
+        ).execute()
+
+        return str(created.get("hangoutLink") or "").strip()
+    except Exception:
+        return ""
 
 
 def tool_outreach_automated_sender(

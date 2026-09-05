@@ -122,6 +122,12 @@ export const sendGeneratedEmail = async (payload) => {
   return response.data;
 };
 
+export const sendFollowupEmail = async (payload) => {
+  const apiUrl = await getApiUrl();
+  const response = await axios.post(`${apiUrl}/followup-email`, payload);
+  return response.data;
+};
+
 export const signup = async (payload) => {
   const apiUrl = await getApiUrl();
   const response = await axios.post(`${apiUrl}/auth/signup`, payload);
@@ -264,6 +270,7 @@ const api = {
   runAgentStream,
   selectCompany,
   sendGeneratedEmail,
+  sendFollowupEmail,
   signup,
   login,
   getCurrentUserProfile,

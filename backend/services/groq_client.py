@@ -19,7 +19,7 @@ def generate_completion(prompt: str, system_prompt: str = "You are a sales intel
                 "content": prompt,
             }
         ],
-        model="llama-3.1-8b-instant",
+        model="llama3-8b-8192",
         temperature=temperature,
         max_tokens=max_tokens,
     )

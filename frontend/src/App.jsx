@@ -30,6 +30,7 @@ const {
   runAgentStream,
   selectCompany,
   sendGeneratedEmail,
+  sendFollowupEmail,
   getCreditsStatus,
   consumeCredits,
   saveSearchHistory,
@@ -411,6 +412,7 @@ function App() {
   const [historyRenameDraft, setHistoryRenameDraft] = useState('');
   const [historyDetailLoadingId, setHistoryDetailLoadingId] = useState('');
   const [historyDetailItem, setHistoryDetailItem] = useState(null);
+  const [followupStatusMap, setFollowupStatusMap] = useState({});
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
   const [creditsInfo, setCreditsInfo] = useState({
     plan: String(session?.user?.plan || 'FREE').toUpperCase(),
@@ -859,6 +861,7 @@ function App() {
     setBaseTemplateMap({});
     setEditingTemplateMap({});
     setTemplateDrafts({});
+    setFollowupStatusMap({});
     setSteps(createInitialSteps());
 
     try {
@@ -1065,6 +1068,30 @@ function App() {
     window.setTimeout(() => setCopiedEmailKey(''), 1600);
   };
 
+  const extractSignalLineForCompany = (company) => {
+    const signals = company?.verified_signals;
+    if (!signals || typeof signals !== 'object') {
+      return 'recent growth initiatives';
+    }
+
+    for (const value of Object.values(signals)) {
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+      if (value && typeof value === 'object' && typeof value.content === 'string' && value.content.trim()) {
+        return value.content.trim();
+      }
+      if (Array.isArray(value)) {
+        const firstText = value.find((item) => typeof item === 'string' && item.trim());
+        if (firstText) {
+          return firstText.trim();
+        }
+      }
+    }
+
+    return 'recent growth initiatives';
+  };
+
   const handleToggleRecipient = (company, contact) => {
     const companyName = company.company_name;
     const contactEmail = contact.email;
@@ -1236,6 +1263,7 @@ function App() {
         subject: finalSubject,
         email_content: signedEmailContent,
         pdf_filename: finalPdfFilename,
+        sender_profile: senderProfile,
       });
 
       setResult((prevResult) => {
@@ -1273,11 +1301,62 @@ function App() {
           },
         };
       });
+
+      setFollowupStatusMap((prev) => {
+        const next = { ...prev };
+        [3, 7, 14].forEach((day) => {
+          delete next[`${companyName}-${day}`];
+        });
+        return next;
+      });
     } catch (sendError) {
       console.error(sendError);
       setError(toUserSafeErrorMessage(sendError, 'Failed to send email manually.'));
     } finally {
       setManualSendingMap((prev) => ({ ...prev, [companyName]: false }));
+    }
+  };
+
+  const handleSendFollowup = async (company, followupDay) => {
+    const key = `${company.company_name}-${followupDay}`;
+    setFollowupStatusMap((prev) => ({
+      ...prev,
+      [key]: { status: 'loading' },
+    }));
+
+    const recipientEmail = String(company?.outreach?.recipient || '').trim();
+    const recipientName = String(
+      company?.selected_contact?.person_name
+      || company?.suggested_contact?.person_name
+      || firstNameFromEmail(recipientEmail)
+      || 'there'
+    ).trim();
+    const senderProfile = getSenderProfile(session?.user || {});
+
+    try {
+      await sendFollowupEmail({
+        recipient: recipientEmail,
+        company_name: company.company_name,
+        recipient_name: recipientName,
+        original_email_content: extractBodyFromJsonLike(company?.outreach?.email_content || ''),
+        followup_day: followupDay,
+        signal_line: extractSignalLineForCompany(company),
+        icp,
+        pdf_filename: company?.outreach?.pdf_filename || selectBestPdfForRole(company?.suggested_contact?.role || '', icp),
+        generate_meeting_link: true,
+        sender_profile: senderProfile,
+      });
+
+      setFollowupStatusMap((prev) => ({
+        ...prev,
+        [key]: { status: 'sent' },
+      }));
+    } catch (followupError) {
+      console.error(followupError);
+      setFollowupStatusMap((prev) => ({
+        ...prev,
+        [key]: { status: 'failed' },
+      }));
     }
   };
 
@@ -1945,24 +2024,26 @@ function App() {
                             </button>
                           )}
                           {result?.send_mode === 'manual' && company.outreach?.status === 'manual_pending' && (
-                            <button
-                              type="button"
-                              className="copy-button send-manual-button"
-                              onClick={() => handleManualSend(company.company_name)}
-                              disabled={manualSendingMap[company.company_name] || (!String(testRecipientEmail || '').trim() && !selectedRecipientMap[company.company_name])}
-                            >
-                              {manualSendingMap[company.company_name] ? (
-                                <>
-                                  <LoaderCircle size={14} className="spin-animation" />
-                                  Sending...
-                                </>
-                              ) : (
-                                <>
-                                  <Send size={14} />
-                                  Send Email
-                                </>
-                              )}
-                            </button>
+                            <div>
+                              <button
+                                type="button"
+                                className="copy-button send-manual-button"
+                                onClick={() => handleManualSend(company.company_name)}
+                                disabled={manualSendingMap[company.company_name] || (!String(testRecipientEmail || '').trim() && !selectedRecipientMap[company.company_name])}
+                              >
+                                {manualSendingMap[company.company_name] ? (
+                                  <>
+                                    <LoaderCircle size={14} className="spin-animation" />
+                                    Sending...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Send size={14} />
+                                    Send Email
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           )}
                           {result?.send_mode === 'manual' && String(testRecipientEmail || '').trim() && (
                             <span className="mode-helper-text">Test recipient override active: send will go to {String(testRecipientEmail || '').trim()}</span>
@@ -2041,6 +2122,44 @@ function App() {
                       </div>
                       <span className="status-message">{company.outreach?.message}</span>
                     </div>
+
+                    {company.outreach?.status === 'sent' && (
+                      <div className="section-block followup-block">
+                        <div className="section-title">Schedule Follow-ups</div>
+                        <div className="followup-actions">
+                          {[3, 7, 14].map((day) => {
+                            const key = `${company.company_name}-${day}`;
+                            const status = followupStatusMap[key]?.status || 'idle';
+                            const isLoading = status === 'loading';
+                            const isSent = status === 'sent';
+                            const isFailed = status === 'failed';
+
+                            return (
+                              <button
+                                key={key}
+                                type="button"
+                                className="copy-button"
+                                onClick={() => handleSendFollowup(company, day)}
+                                disabled={isLoading || isSent}
+                              >
+                                {isLoading ? (
+                                  <>
+                                    <LoaderCircle size={14} className="spin-animation" />
+                                    Sending Day {day}...
+                                  </>
+                                ) : isSent ? (
+                                  <>✅ Sent</>
+                                ) : isFailed ? (
+                                  <>❌ Failed</>
+                                ) : (
+                                  <>Send Day {day} Follow-up</>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </article>
                     );
                   })()

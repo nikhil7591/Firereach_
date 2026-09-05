@@ -13,6 +13,8 @@ from agent import run_agent_workflow, run_selected_company_workflow, send_genera
 from database import Base, engine
 import models  # noqa: F401
 from routes import auth, credits, history, payments
+from tools.followup_sender import generate_followup_email
+from tools.outreach_sender import create_google_meet_link, send_prepared_email
 
 
 SEND_EMAIL_TIMEOUT_SECONDS = 45
@@ -87,6 +89,21 @@ class ManualSendRequest(BaseModel):
     subject: str
     email_content: str
     pdf_filename: str = ""
+    sender_profile: dict = {}
+
+
+class FollowupEmailRequest(BaseModel):
+    recipient: str
+    company_name: str
+    recipient_name: str
+    original_email_content: str
+    followup_day: int
+    signal_line: str
+    icp: str
+    pdf_filename: str = ""
+    meeting_link: str = ""
+    generate_meeting_link: bool = False
+    sender_profile: dict = {}
 
 
 @app.post("/run-agent")
@@ -178,6 +195,50 @@ async def send_email(request: ManualSendRequest):
             "message": f"Email send timed out after {SEND_EMAIL_TIMEOUT_SECONDS}s. Please retry.",
             "pdf_filename": request.pdf_filename,
         }
+
+
+@app.post("/followup-email")
+async def send_followup_email(request: FollowupEmailRequest):
+    if request.followup_day not in {3, 7, 14}:
+        raise HTTPException(status_code=400, detail="followup_day must be 3, 7, or 14")
+
+    meeting_link = str(request.meeting_link or "").strip()
+    if not meeting_link and request.generate_meeting_link:
+        meeting_link = create_google_meet_link()
+
+    try:
+        generated = await asyncio.to_thread(
+            generate_followup_email,
+            request.original_email_content,
+            request.company_name,
+            request.recipient_name,
+            request.recipient,
+            request.followup_day,
+            request.signal_line,
+            request.icp,
+            meeting_link,
+            request.sender_profile,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Follow-up generation failed: {exc}") from exc
+
+    subject = str(generated.get("subject") or "").strip()
+    body = str(generated.get("body") or "").strip()
+
+    send_result = await asyncio.to_thread(
+        send_prepared_email,
+        request.recipient,
+        subject,
+        body,
+        request.pdf_filename,
+    )
+
+    return {
+        "status": send_result.get("status", "failed"),
+        "subject": subject,
+        "email_content": body,
+        "day": int(generated.get("day") or request.followup_day),
+    }
 
 # pinger to check if backend is alive
 @app.get("/ping")

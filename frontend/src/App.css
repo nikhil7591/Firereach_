@@ -845,6 +845,17 @@
   background: rgba(16, 185, 129, 0.22);
 }
 
+.followup-block {
+  margin-top: 0.75rem;
+}
+
+.followup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.55rem;
+}
+
 .recipient-select-btn {
   margin-top: 0.55rem;
   font-size: 0.76rem;
