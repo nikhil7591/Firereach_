@@ -19,7 +19,7 @@ def generate_completion(prompt: str, system_prompt: str = "You are a sales intel
                 "content": prompt,
             }
         ],
-        model="llama3-8b-8192",
+        model="openai/gpt-oss-20b",
         temperature=temperature,
         max_tokens=max_tokens,
     )
